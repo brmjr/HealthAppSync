@@ -121,6 +121,26 @@ data class KtDayDiary(
 
     val totalLoggedKcal: Double
         get() = allFoodItems.sumOf { it.energyKcal ?: 0.0 }
+
+    val totalLoggedProteinGrams: Double
+        get() = allFoodItems.sumOf { it.proteinGrams ?: 0.0 }
+            .takeIf { it > 0.0 } ?: (proteinTotalGrams ?: 0.0)
+
+    val totalLoggedCarbohydrateGrams: Double
+        get() = allFoodItems.sumOf { it.carbohydrateGrams ?: 0.0 }
+            .takeIf { it > 0.0 } ?: (carbohydrateTotalGrams ?: 0.0)
+
+    val totalLoggedFatGrams: Double
+        get() = allFoodItems.sumOf { it.fatGrams ?: 0.0 }
+            .takeIf { it > 0.0 } ?: (fatTotalGrams ?: 0.0)
+
+    val totalLoggedFiberGrams: Double
+        get() = allFoodItems.sumOf { it.fiberGrams ?: 0.0 }
+            .takeIf { it > 0.0 } ?: (fiberTotalGrams ?: 0.0)
+
+    val totalLoggedSugarGrams: Double
+        get() = allFoodItems.sumOf { it.sugarGrams ?: 0.0 }
+            .takeIf { it > 0.0 } ?: (sugarTotalGrams ?: 0.0)
 }
 
 object MealSlotMapper {

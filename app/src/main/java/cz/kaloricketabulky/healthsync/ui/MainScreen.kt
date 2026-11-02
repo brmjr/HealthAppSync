@@ -702,10 +702,10 @@ private fun DayPreviewCard(daySummary: DaySyncSummary) {
     val diary = daySummary.diary
     val items = diary.allFoodItems
     val kcal = diary.totalLoggedKcal.roundToInt()
-    val protein = (diary.proteinTotalGrams ?: items.sumOf { it.proteinGrams ?: 0.0 }).roundToInt()
-    val carbs = (diary.carbohydrateTotalGrams ?: items.sumOf { it.carbohydrateGrams ?: 0.0 }).roundToInt()
-    val fat = (diary.fatTotalGrams ?: items.sumOf { it.fatGrams ?: 0.0 }).roundToInt()
-    val fiber = (diary.fiberTotalGrams ?: items.sumOf { it.fiberGrams ?: 0.0 }).roundToInt()
+    val protein = diary.totalLoggedProteinGrams.roundToInt()
+    val carbs = diary.totalLoggedCarbohydrateGrams.roundToInt()
+    val fat = diary.totalLoggedFatGrams.roundToInt()
+    val fiber = diary.totalLoggedFiberGrams.roundToInt()
     val sodiumMg = (items.sumOf { (it.effectiveSodiumGrams ?: 0.0) * 1000.0 }).roundToInt()
 
     Card(modifier = Modifier.fillMaxWidth()) {

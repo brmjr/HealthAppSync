@@ -15,6 +15,8 @@ import cz.kaloricketabulky.healthsync.data.model.KtFoodItem
 import cz.kaloricketabulky.healthsync.data.model.KtMealSlot
 import cz.kaloricketabulky.healthsync.data.model.MealSlotTimes
 import cz.kaloricketabulky.healthsync.data.model.SyncGranularity
+import java.time.Duration
+import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -77,17 +79,21 @@ class HealthConnectManager(private val context: Context) {
         zoneId: ZoneId = ZoneId.of("Europe/Prague")
     ): DayWriteCount {
         val client = getClient()
+        val now = Instant.now()
 
         val dayStart = diary.date.atStartOfDay(zoneId).toInstant()
-        val dayEnd = diary.date.plusDays(1).atStartOfDay(zoneId).minusNanos(1).toInstant()
+        val rawDayEnd = diary.date.plusDays(1).atStartOfDay(zoneId).minusNanos(1).toInstant()
+        val dayEnd = if (rawDayEnd.isAfter(now)) now else rawDayEnd
 
         // 1. Nutrition records
-        client.deleteRecords(
-            recordType = NutritionRecord::class,
-            timeRangeFilter = TimeRangeFilter.between(dayStart, dayEnd)
-        )
+        if (dayEnd.isAfter(dayStart)) {
+            client.deleteRecords(
+                recordType = NutritionRecord::class,
+                timeRangeFilter = TimeRangeFilter.between(dayStart, dayEnd)
+            )
+        }
 
-        val nutritionRecords = buildNutritionRecords(diary, granularity, mealSlotTimes, zoneId)
+        val nutritionRecords = buildNutritionRecords(diary, granularity, mealSlotTimes, zoneId, now)
         if (nutritionRecords.isNotEmpty()) {
             client.insertRecords(nutritionRecords)
         }
@@ -95,11 +101,13 @@ class HealthConnectManager(private val context: Context) {
         // 2. Hydration record (Pitný režim)
         var hydrationLitersWritten: Double? = null
         if (syncHydration) {
-            client.deleteRecords(
-                recordType = HydrationRecord::class,
-                timeRangeFilter = TimeRangeFilter.between(dayStart, dayEnd)
-            )
-            val hydrationRecord = buildHydrationRecord(diary, zoneId)
+            if (dayEnd.isAfter(dayStart)) {
+                client.deleteRecords(
+                    recordType = HydrationRecord::class,
+                    timeRangeFilter = TimeRangeFilter.between(dayStart, dayEnd)
+                )
+            }
+            val hydrationRecord = buildHydrationRecord(diary, zoneId, now)
             if (hydrationRecord != null) {
                 client.insertRecords(listOf(hydrationRecord))
                 hydrationLitersWritten = diary.drinkRegimeLiters
@@ -114,16 +122,22 @@ class HealthConnectManager(private val context: Context) {
 
     fun buildHydrationRecord(
         diary: KtDayDiary,
-        zoneId: ZoneId = ZoneId.of("Europe/Prague")
+        zoneId: ZoneId = ZoneId.of("Europe/Prague"),
+        now: Instant = Instant.now()
     ): HydrationRecord? {
         val liters = diary.drinkRegimeLiters?.takeIf { it > 0.0 && it <= 50.0 } ?: return null
-        val startZdt = ZonedDateTime.of(diary.date, LocalTime.of(10, 0), zoneId)
-        val endZdt = startZdt.plusHours(8)
+        val startZdt = ZonedDateTime.of(diary.date, LocalTime.of(8, 0), zoneId)
+        val endZdt = startZdt.plusMinutes(5)
+        val (clampedStart, clampedEnd) = clampIntervalToPast(
+            start = startZdt.toInstant(),
+            end = endZdt.toInstant(),
+            now = now
+        )
 
         return HydrationRecord(
-            startTime = startZdt.toInstant(),
+            startTime = clampedStart,
             startZoneOffset = startZdt.offset,
-            endTime = endZdt.toInstant(),
+            endTime = clampedEnd,
             endZoneOffset = endZdt.offset,
             volume = Volume.liters(liters),
             metadata = Metadata.manualEntry(
@@ -139,20 +153,23 @@ class HealthConnectManager(private val context: Context) {
         diary: KtDayDiary,
         granularity: SyncGranularity,
         mealSlotTimes: MealSlotTimes = MealSlotTimes(),
-        zoneId: ZoneId = ZoneId.of("Europe/Prague")
+        zoneId: ZoneId = ZoneId.of("Europe/Prague"),
+        now: Instant = Instant.now()
     ): List<NutritionRecord> {
         return when (granularity) {
-            SyncGranularity.PER_FOOD_ITEM -> buildPerItemRecords(diary, mealSlotTimes, zoneId)
-            SyncGranularity.PER_MEAL_SLOT -> buildPerMealRecords(diary, mealSlotTimes, zoneId)
+            SyncGranularity.PER_FOOD_ITEM -> buildPerItemRecords(diary, mealSlotTimes, zoneId, now)
+            SyncGranularity.PER_MEAL_SLOT -> buildPerMealRecords(diary, mealSlotTimes, zoneId, now)
         }
     }
 
     private fun buildPerItemRecords(
         diary: KtDayDiary,
         mealSlotTimes: MealSlotTimes,
-        zoneId: ZoneId
+        zoneId: ZoneId,
+        now: Instant
     ): List<NutritionRecord> {
         val records = mutableListOf<NutritionRecord>()
+        var runningIndex = 0
 
         for (meal in diary.meals) {
             val slotStart = meal.startTime(mealSlotTimes)
@@ -161,12 +178,21 @@ class HealthConnectManager(private val context: Context) {
                 val startZdt = ZonedDateTime.of(diary.date, baseTime, zoneId)
                 val endZdt = startZdt.plusMinutes(1)
 
+                val (clampedStart, clampedEnd) = clampIntervalToPast(
+                    start = startZdt.toInstant(),
+                    end = endZdt.toInstant(),
+                    now = now,
+                    staggerSeconds = (runningIndex * 2).toLong()
+                )
+                runningIndex++
+
                 records.add(
                     itemToNutritionRecord(
                         item = item,
                         meal = meal,
-                        startZdt = startZdt,
-                        endZdt = endZdt
+                        startInstant = clampedStart,
+                        endInstant = clampedEnd,
+                        zoneOffset = startZdt.offset
                     )
                 )
             }
@@ -177,15 +203,22 @@ class HealthConnectManager(private val context: Context) {
     private fun buildPerMealRecords(
         diary: KtDayDiary,
         mealSlotTimes: MealSlotTimes,
-        zoneId: ZoneId
+        zoneId: ZoneId,
+        now: Instant
     ): List<NutritionRecord> {
         val records = mutableListOf<NutritionRecord>()
 
-        for (meal in diary.meals) {
-            if (meal.items.isEmpty()) continue
+        diary.meals.forEachIndexed { mealIdx, meal ->
+            if (meal.items.isEmpty()) return@forEachIndexed
 
             val startZdt = ZonedDateTime.of(diary.date, meal.startTime(mealSlotTimes), zoneId)
             val endZdt = startZdt.plusMinutes(15)
+            val (clampedStart, clampedEnd) = clampIntervalToPast(
+                start = startZdt.toInstant(),
+                end = endZdt.toInstant(),
+                now = now,
+                staggerSeconds = (mealIdx * 5).toLong()
+            )
             val summaryTitle = "${meal.title}: " + meal.items.joinToString(", ") { it.title }
 
             val totalKcal = meal.items.sumNullable { it.energyKcal }
@@ -204,9 +237,9 @@ class HealthConnectManager(private val context: Context) {
 
             records.add(
                 NutritionRecord(
-                    startTime = startZdt.toInstant(),
+                    startTime = clampedStart,
                     startZoneOffset = startZdt.offset,
-                    endTime = endZdt.toInstant(),
+                    endTime = clampedEnd,
                     endZoneOffset = endZdt.offset,
                     name = summaryTitle.take(MAX_NAME_LENGTH),
                     mealType = meal.mealType,
@@ -235,14 +268,15 @@ class HealthConnectManager(private val context: Context) {
     private fun itemToNutritionRecord(
         item: KtFoodItem,
         meal: KtMealSlot,
-        startZdt: ZonedDateTime,
-        endZdt: ZonedDateTime
+        startInstant: Instant,
+        endInstant: Instant,
+        zoneOffset: java.time.ZoneOffset
     ): NutritionRecord {
         return NutritionRecord(
-            startTime = startZdt.toInstant(),
-            startZoneOffset = startZdt.offset,
-            endTime = endZdt.toInstant(),
-            endZoneOffset = endZdt.offset,
+            startTime = startInstant,
+            startZoneOffset = zoneOffset,
+            endTime = endInstant,
+            endZoneOffset = zoneOffset,
             name = item.displayName.take(MAX_NAME_LENGTH),
             mealType = meal.mealType,
             energy = positiveKcal(item.energyKcal),
@@ -262,6 +296,30 @@ class HealthConnectManager(private val context: Context) {
                 clientRecordId = "kt_item_${item.id}"
             )
         )
+    }
+
+    /**
+     * Health Connect rejects any record whose `startTime` or `endTime` is in the future
+     * relative to `Instant.now()`. When a user pre-logs later meals for today (e.g. logging
+     * Večeře 19:00 at 18:25), this clamps the interval so it ends safely before [now].
+     */
+    internal fun clampIntervalToPast(
+        start: Instant,
+        end: Instant,
+        now: Instant = Instant.now(),
+        staggerSeconds: Long = 0L
+    ): Pair<Instant, Instant> {
+        val safeLatestEnd = now.minusSeconds(10L + staggerSeconds.coerceIn(0L, 600L))
+        val durationSeconds = Duration.between(start, end).seconds.coerceIn(30L, 300L)
+        if (end.isAfter(safeLatestEnd) || start.isAfter(safeLatestEnd)) {
+            val clampedEnd = safeLatestEnd
+            val clampedStart = clampedEnd.minusSeconds(durationSeconds)
+            return clampedStart to clampedEnd
+        }
+        if (!end.isAfter(start)) {
+            return start to start.plusSeconds(30)
+        }
+        return start to end
     }
 
     private fun parseOptionalTime(rawTime: String?): LocalTime? {
