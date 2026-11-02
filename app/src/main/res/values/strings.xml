@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">KT → Health Connect</string>
+    <array name="health_permissions">
+        <item>android.permission.health.READ_NUTRITION</item>
+        <item>android.permission.health.WRITE_NUTRITION</item>
+    </array>
+</resources>
+

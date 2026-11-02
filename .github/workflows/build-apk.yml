@@ -1,0 +1,61 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Run Unit Tests
+        run: gradle testDebugUnitTest
+
+      - name: Build Debug APK
+        run: gradle assembleDebug
+
+      - name: Rename APK for easy download
+        run: cp app/build/outputs/apk/debug/app-debug.apk KalorickeTabulky-HealthConnect.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KalorickeTabulky-HealthConnect-APK
+          path: KalorickeTabulky-HealthConnect.apk
+          if-no-files-found: error
+
+      - name: Publish APK to GitHub Releases
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: "Build #${{ github.run_number }} (Ready to Install)"
+          body: |
+            ### Kalorické Tabulky → Health Connect Android App
+            Download **`KalorickeTabulky-HealthConnect.apk`** below on your Android phone and tap it to install.
+          files: KalorickeTabulky-HealthConnect.apk
+          prerelease: false
