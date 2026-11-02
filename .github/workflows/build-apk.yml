@@ -51,11 +51,17 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Run Unit Tests
-        run: gradle testDebugUnitTest --stacktrace
-
-      - name: Build Debug APK
-        run: gradle assembleDebug --stacktrace
+      - name: Build Debug APK & Run Unit Tests
+        run: |
+          set +e
+          gradle testDebugUnitTest assembleDebug --no-daemon > build.log 2>&1
+          EXIT_CODE=$?
+          cat build.log
+          if [ $EXIT_CODE -ne 0 ]; then
+            SUMMARY=$(grep -E "(^e: |FAILURE:|What went wrong:|^\* |Caused by:|FAILED)" -A 4 build.log | tail -n 35 | tr '\r\n' '  ')
+            echo "::error title=GradleBuildFailure::$SUMMARY"
+            exit $EXIT_CODE
+          fi
 
       - name: Rename APK for easy download
         run: cp app/build/outputs/apk/debug/app-debug.apk KalorickeTabulky-HealthConnect.apk
