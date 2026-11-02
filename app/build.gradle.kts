@@ -6,12 +6,12 @@ plugins {
 
 android {
     namespace = "cz.kaloricketabulky.healthsync"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "cz.kaloricketabulky.healthsync"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
 
