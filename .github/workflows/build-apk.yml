@@ -1,10 +1,10 @@
-name: Build Android APK
+name: Build Android APK (v2)
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ v2-features, main, master ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ v2-features, main, master ]
   workflow_dispatch:
 
 permissions:
@@ -63,24 +63,33 @@ jobs:
             exit $EXIT_CODE
           fi
 
-      - name: Rename APK for easy download
-        run: cp app/build/outputs/apk/debug/app-debug.apk KalorickeTabulky-HealthConnect.apk
+      - name: Rename APK for easy side-by-side download
+        run: cp app/build/outputs/apk/debug/app-debug.apk KalorickeTabulky-HealthConnect-v2.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KalorickeTabulky-HealthConnect-APK
-          path: KalorickeTabulky-HealthConnect.apk
+          name: KalorickeTabulky-HealthConnect-v2-APK
+          path: KalorickeTabulky-HealthConnect-v2.apk
           if-no-files-found: error
 
-      - name: Publish APK to GitHub Releases
+      - name: Publish v2 APK to GitHub Releases
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: "Build #${{ github.run_number }} (Ready to Install)"
+          tag_name: v2.0.${{ github.run_number }}
+          name: "v2.0.${{ github.run_number }} — Side-by-Side v2 Build"
           body: |
-            ### Kalorické Tabulky → Health Connect Android App
-            Download **`KalorickeTabulky-HealthConnect.apk`** below on your Android phone and tap it to install.
-          files: KalorickeTabulky-HealthConnect.apk
-          prerelease: false
+            ### KT → Health Connect (v2 Side-by-Side Edition)
+            This build uses package ID `cz.kaloricketabulky.healthsync.v2` so you can install it **side-by-side** on your phone without overwriting your stable v1 app (`v1.0.5`).
+
+            **New in v2:**
+            - Automatic **Sůl (Salt) → Sodium** conversion for Czech/SK food items
+            - Customizable default timestamps (`HH:mm`) for all 6 meal slots
+            - **Water Intake (`Pitný režim`) → `HydrationRecord`** sync into Health Connect
+            - **Quick Settings Tile** (`Sync KT → Health`) in the Android swipe-down shade
+            - **Smart Evening Daily Sync** (default `21:30`) before midnight
+            - **Historical Date-Range Backfill** (30 days / current month / previous month / custom range)
+            - **In-App GitHub Release Update Checker**, Adaptive App Icon & Material You Dark/Light theme
+          files: KalorickeTabulky-HealthConnect-v2.apk
+          prerelease: true

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Apple / nutrition bowl & sync heart symbol -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,30 C44,30 36,38 36,48 C36,61 54,76 54,76 C54,76 72,61 72,48 C72,38 64,30 54,30 Z" />
+    <path
+        android:fillColor="#7EE2B8"
+        android:pathData="M54,22 C54,22 61,20 63,27 C57,28 54,22 54,22 Z" />
+    <path
+        android:fillColor="#0F5338"
+        android:pathData="M46,49 L52,55 L63,43 L60,40 L52,49 L49,46 Z" />
+</vector>

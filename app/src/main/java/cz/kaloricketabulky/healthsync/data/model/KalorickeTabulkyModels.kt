@@ -6,6 +6,7 @@ import java.security.MessageDigest
 import java.text.Normalizer
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 
 /**
  * Granularity when writing nutrition records into Health Connect.
@@ -16,6 +17,27 @@ enum class SyncGranularity {
 
     /** Aggregate food items into one NutritionRecord per meal slot (Breakfast, Lunch, etc.). */
     PER_MEAL_SLOT
+}
+
+/**
+ * User-customizable default timestamps (HH:mm) for the 6 Kalorické Tabulky meal slots.
+ */
+data class MealSlotTimes(
+    val breakfast: String = DEFAULT_BREAKFAST,
+    val morningSnack: String = DEFAULT_MORNING_SNACK,
+    val lunch: String = DEFAULT_LUNCH,
+    val afternoonSnack: String = DEFAULT_AFTERNOON_SNACK,
+    val dinner: String = DEFAULT_DINNER,
+    val secondDinner: String = DEFAULT_SECOND_DINNER
+) {
+    companion object {
+        const val DEFAULT_BREAKFAST = "08:00"
+        const val DEFAULT_MORNING_SNACK = "10:30"
+        const val DEFAULT_LUNCH = "12:30"
+        const val DEFAULT_AFTERNOON_SNACK = "16:00"
+        const val DEFAULT_DINNER = "19:00"
+        const val DEFAULT_SECOND_DINNER = "21:00"
+    }
 }
 
 data class KtFoodItem(
@@ -49,12 +71,24 @@ data class KtFoodItem(
             }
         }
 
+    /**
+     * Effective sodium in grams: uses explicit `sodiumGrams` when present,
+     * otherwise converts Czech/EU `saltGrams` (Sůl / NaCl) into sodium ($\text{salt} \times 0.3934$).
+     */
+    val effectiveSodiumGrams: Double?
+        get() = when {
+            sodiumGrams != null && sodiumGrams > 0.0 -> sodiumGrams
+            saltGrams != null && saltGrams > 0.0 -> saltGrams * SALT_TO_SODIUM_RATIO
+            else -> null
+        }
+
     /** Display name combining food title and portion unit, e.g. "Ovesné vločky (50 g)". */
     val displayName: String
         get() = if (!unit.isNullOrBlank()) "$title ($unit)" else title
 
     companion object {
         const val KJ_PER_KCAL = 4.184
+        const val SALT_TO_SODIUM_RATIO = 0.3934
     }
 }
 
@@ -66,8 +100,8 @@ data class KtMealSlot(
     val mealType: Int
         get() = MealSlotMapper.toHealthConnectMealType(title)
 
-    val defaultStartTime: LocalTime
-        get() = MealSlotMapper.defaultStartTimeFor(title)
+    fun startTime(customTimes: MealSlotTimes = MealSlotTimes()): LocalTime =
+        MealSlotMapper.startTimeFor(title, customTimes)
 }
 
 data class KtDayDiary(
@@ -79,7 +113,8 @@ data class KtDayDiary(
     val carbohydrateTotalGrams: Double?,
     val fatTotalGrams: Double?,
     val fiberTotalGrams: Double?,
-    val sugarTotalGrams: Double?
+    val sugarTotalGrams: Double?,
+    val drinkRegimeLiters: Double? = null
 ) {
     val allFoodItems: List<KtFoodItem>
         get() = meals.flatMap { it.items }
@@ -89,6 +124,8 @@ data class KtDayDiary(
 }
 
 object MealSlotMapper {
+    private val TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("H:mm")
+
     private fun normalize(text: String?): String {
         if (text.isNullOrBlank()) return ""
         val decomposed = Normalizer.normalize(text.trim().lowercase(), Normalizer.Form.NFD)
@@ -106,15 +143,30 @@ object MealSlotMapper {
         }
     }
 
-    fun defaultStartTimeFor(title: String?): LocalTime {
+    fun startTimeFor(title: String?, customTimes: MealSlotTimes = MealSlotTimes()): LocalTime {
         return when (normalize(title)) {
-            "snidane", "ranajky", "breakfast" -> LocalTime.of(8, 0)
-            "dopoledni svacina", "desiata" -> LocalTime.of(10, 30)
-            "obed", "lunch" -> LocalTime.of(12, 30)
-            "odpoledni svacina", "olovrant" -> LocalTime.of(16, 0)
-            "vecere", "vecera", "dinner" -> LocalTime.of(19, 0)
-            "druha vecere", "druha vecera" -> LocalTime.of(21, 0)
+            "snidane", "ranajky", "breakfast" ->
+                parseTimeOrDefault(customTimes.breakfast, LocalTime.of(8, 0))
+            "dopoledni svacina", "desiata" ->
+                parseTimeOrDefault(customTimes.morningSnack, LocalTime.of(10, 30))
+            "obed", "lunch" ->
+                parseTimeOrDefault(customTimes.lunch, LocalTime.of(12, 30))
+            "odpoledni svacina", "olovrant" ->
+                parseTimeOrDefault(customTimes.afternoonSnack, LocalTime.of(16, 0))
+            "vecere", "vecera", "dinner" ->
+                parseTimeOrDefault(customTimes.dinner, LocalTime.of(19, 0))
+            "druha vecere", "druha vecera" ->
+                parseTimeOrDefault(customTimes.secondDinner, LocalTime.of(21, 0))
             else -> LocalTime.of(12, 0)
+        }
+    }
+
+    fun parseTimeOrDefault(raw: String?, fallback: LocalTime): LocalTime {
+        if (raw.isNullOrBlank()) return fallback
+        return try {
+            LocalTime.parse(raw.trim(), TIME_FORMATTER)
+        } catch (_: Exception) {
+            fallback
         }
     }
 }
@@ -231,7 +283,8 @@ object KalorickeTabulkyParser {
             carbohydrateTotalGrams = parseCzechDouble(data.opt("carbohydrateTotal")),
             fatTotalGrams = parseCzechDouble(data.opt("fatTotal")),
             fiberTotalGrams = parseCzechDouble(data.opt("fiberTotal")),
-            sugarTotalGrams = parseCzechDouble(data.opt("sugarTotal"))
+            sugarTotalGrams = parseCzechDouble(data.opt("sugarTotal")),
+            drinkRegimeLiters = parseCzechDouble(data.opt("drinkRegime"))
         )
     }
 
@@ -241,4 +294,3 @@ object KalorickeTabulkyParser {
         return value.takeIf { it.isNotEmpty() && !it.equals("null", ignoreCase = true) }
     }
 }
-

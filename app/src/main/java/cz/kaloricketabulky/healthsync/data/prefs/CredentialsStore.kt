@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import cz.kaloricketabulky.healthsync.data.api.KalorickeTabulkyClient
+import cz.kaloricketabulky.healthsync.data.model.MealSlotTimes
 import cz.kaloricketabulky.healthsync.data.model.SyncGranularity
 
 data class SyncSettings(
@@ -13,10 +14,18 @@ data class SyncSettings(
     val baseUrl: String = KalorickeTabulkyClient.DEFAULT_BASE_URL,
     val daysToSync: Int = 2,
     val granularity: SyncGranularity = SyncGranularity.PER_FOOD_ITEM,
+    val syncHydration: Boolean = true,
     val autoSyncEnabled: Boolean = false,
+    val eveningSyncEnabled: Boolean = false,
+    val eveningSyncTime: String = DEFAULT_EVENING_SYNC_TIME,
+    val mealSlotTimes: MealSlotTimes = MealSlotTimes(),
     val lastSyncEpochMillis: Long = 0L,
     val lastSyncSummary: String? = null
-)
+) {
+    companion object {
+        const val DEFAULT_EVENING_SYNC_TIME = "21:30"
+    }
+}
 
 class CredentialsStore(context: Context) {
     private val prefs: SharedPreferences = createPreferences(context.applicationContext)
@@ -46,6 +55,21 @@ class CredentialsStore(context: Context) {
             SyncGranularity.PER_FOOD_ITEM
         }
 
+        val mealSlotTimes = MealSlotTimes(
+            breakfast = prefs.getString(KEY_TIME_BREAKFAST, MealSlotTimes.DEFAULT_BREAKFAST)
+                ?: MealSlotTimes.DEFAULT_BREAKFAST,
+            morningSnack = prefs.getString(KEY_TIME_MORNING_SNACK, MealSlotTimes.DEFAULT_MORNING_SNACK)
+                ?: MealSlotTimes.DEFAULT_MORNING_SNACK,
+            lunch = prefs.getString(KEY_TIME_LUNCH, MealSlotTimes.DEFAULT_LUNCH)
+                ?: MealSlotTimes.DEFAULT_LUNCH,
+            afternoonSnack = prefs.getString(KEY_TIME_AFTERNOON_SNACK, MealSlotTimes.DEFAULT_AFTERNOON_SNACK)
+                ?: MealSlotTimes.DEFAULT_AFTERNOON_SNACK,
+            dinner = prefs.getString(KEY_TIME_DINNER, MealSlotTimes.DEFAULT_DINNER)
+                ?: MealSlotTimes.DEFAULT_DINNER,
+            secondDinner = prefs.getString(KEY_TIME_SECOND_DINNER, MealSlotTimes.DEFAULT_SECOND_DINNER)
+                ?: MealSlotTimes.DEFAULT_SECOND_DINNER
+        )
+
         return SyncSettings(
             email = prefs.getString(KEY_EMAIL, "") ?: "",
             password = prefs.getString(KEY_PASSWORD, "") ?: "",
@@ -53,7 +77,12 @@ class CredentialsStore(context: Context) {
                 ?: KalorickeTabulkyClient.DEFAULT_BASE_URL,
             daysToSync = prefs.getInt(KEY_DAYS_TO_SYNC, 2).coerceIn(1, 30),
             granularity = granularity,
+            syncHydration = prefs.getBoolean(KEY_SYNC_HYDRATION, true),
             autoSyncEnabled = prefs.getBoolean(KEY_AUTO_SYNC, false),
+            eveningSyncEnabled = prefs.getBoolean(KEY_EVENING_SYNC, false),
+            eveningSyncTime = prefs.getString(KEY_EVENING_SYNC_TIME, SyncSettings.DEFAULT_EVENING_SYNC_TIME)
+                ?: SyncSettings.DEFAULT_EVENING_SYNC_TIME,
+            mealSlotTimes = mealSlotTimes,
             lastSyncEpochMillis = prefs.getLong(KEY_LAST_SYNC_TIME, 0L),
             lastSyncSummary = prefs.getString(KEY_LAST_SYNC_SUMMARY, null)
         )
@@ -67,11 +96,28 @@ class CredentialsStore(context: Context) {
             .apply()
     }
 
-    fun saveSyncOptions(daysToSync: Int, granularity: SyncGranularity, autoSyncEnabled: Boolean) {
+    fun saveSyncOptions(
+        daysToSync: Int,
+        granularity: SyncGranularity,
+        syncHydration: Boolean,
+        autoSyncEnabled: Boolean,
+        eveningSyncEnabled: Boolean,
+        eveningSyncTime: String,
+        mealSlotTimes: MealSlotTimes
+    ) {
         prefs.edit()
             .putInt(KEY_DAYS_TO_SYNC, daysToSync.coerceIn(1, 30))
             .putString(KEY_GRANULARITY, granularity.name)
+            .putBoolean(KEY_SYNC_HYDRATION, syncHydration)
             .putBoolean(KEY_AUTO_SYNC, autoSyncEnabled)
+            .putBoolean(KEY_EVENING_SYNC, eveningSyncEnabled)
+            .putString(KEY_EVENING_SYNC_TIME, eveningSyncTime.trim())
+            .putString(KEY_TIME_BREAKFAST, mealSlotTimes.breakfast.trim())
+            .putString(KEY_TIME_MORNING_SNACK, mealSlotTimes.morningSnack.trim())
+            .putString(KEY_TIME_LUNCH, mealSlotTimes.lunch.trim())
+            .putString(KEY_TIME_AFTERNOON_SNACK, mealSlotTimes.afternoonSnack.trim())
+            .putString(KEY_TIME_DINNER, mealSlotTimes.dinner.trim())
+            .putString(KEY_TIME_SECOND_DINNER, mealSlotTimes.secondDinner.trim())
             .apply()
     }
 
@@ -83,16 +129,24 @@ class CredentialsStore(context: Context) {
     }
 
     companion object {
-        private const val PREFS_FILE_NAME = "kt_health_sync_secure_prefs"
-        private const val PREFS_FILE_NAME_FALLBACK = "kt_health_sync_prefs"
+        private const val PREFS_FILE_NAME = "kt_health_sync_v2_secure_prefs"
+        private const val PREFS_FILE_NAME_FALLBACK = "kt_health_sync_v2_prefs"
         private const val KEY_EMAIL = "email"
         private const val KEY_PASSWORD = "password"
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_DAYS_TO_SYNC = "days_to_sync"
         private const val KEY_GRANULARITY = "granularity"
+        private const val KEY_SYNC_HYDRATION = "sync_hydration"
         private const val KEY_AUTO_SYNC = "auto_sync"
+        private const val KEY_EVENING_SYNC = "evening_sync"
+        private const val KEY_EVENING_SYNC_TIME = "evening_sync_time"
+        private const val KEY_TIME_BREAKFAST = "time_breakfast"
+        private const val KEY_TIME_MORNING_SNACK = "time_morning_snack"
+        private const val KEY_TIME_LUNCH = "time_lunch"
+        private const val KEY_TIME_AFTERNOON_SNACK = "time_afternoon_snack"
+        private const val KEY_TIME_DINNER = "time_dinner"
+        private const val KEY_TIME_SECOND_DINNER = "time_second_dinner"
         private const val KEY_LAST_SYNC_TIME = "last_sync_time"
         private const val KEY_LAST_SYNC_SUMMARY = "last_sync_summary"
     }
 }
-

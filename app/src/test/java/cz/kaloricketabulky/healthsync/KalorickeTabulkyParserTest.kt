@@ -3,10 +3,12 @@ package cz.kaloricketabulky.healthsync
 import androidx.health.connect.client.records.MealType
 import cz.kaloricketabulky.healthsync.data.model.KalorickeTabulkyParser
 import cz.kaloricketabulky.healthsync.data.model.MealSlotMapper
+import cz.kaloricketabulky.healthsync.data.model.MealSlotTimes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
 import java.time.LocalDate
+import java.time.LocalTime
 
 class KalorickeTabulkyParserTest {
 
@@ -27,7 +29,7 @@ class KalorickeTabulkyParserTest {
     }
 
     @Test
-    fun `MealSlotMapper maps Czech and Slovak meal titles to Health Connect MealType`() {
+    fun `MealSlotMapper maps Czech and Slovak meal titles and custom times`() {
         assertEquals(MealType.MEAL_TYPE_BREAKFAST, MealSlotMapper.toHealthConnectMealType("Snídaně"))
         assertEquals(MealType.MEAL_TYPE_BREAKFAST, MealSlotMapper.toHealthConnectMealType("Raňajky"))
         assertEquals(MealType.MEAL_TYPE_SNACK, MealSlotMapper.toHealthConnectMealType("Dopolední svačina"))
@@ -35,10 +37,14 @@ class KalorickeTabulkyParserTest {
         assertEquals(MealType.MEAL_TYPE_SNACK, MealSlotMapper.toHealthConnectMealType("Odpolední svačina"))
         assertEquals(MealType.MEAL_TYPE_DINNER, MealSlotMapper.toHealthConnectMealType("Večeře"))
         assertEquals(MealType.MEAL_TYPE_SNACK, MealSlotMapper.toHealthConnectMealType("Druhá večeře"))
+
+        val customTimes = MealSlotTimes(breakfast = "07:15", lunch = "13:00")
+        assertEquals(LocalTime.of(7, 15), MealSlotMapper.startTimeFor("Snídaně", customTimes))
+        assertEquals(LocalTime.of(13, 0), MealSlotMapper.startTimeFor("Oběd", customTimes))
     }
 
     @Test
-    fun `parseDiaryResponse parses meals and foodstuff items accurately`() {
+    fun `parseDiaryResponse parses meals, drinkRegime, and converts salt to sodium`() {
         val sampleJson = """
             {
               "requestId": null,
@@ -53,6 +59,7 @@ class KalorickeTabulkyParserTest {
                 "fiberTotal": 12.0,
                 "sugarTotal": 18.0,
                 "energyTotal": 850.0,
+                "drinkRegime": "2,35",
                 "times": [
                   {
                     "id": "22.527",
@@ -61,24 +68,20 @@ class KalorickeTabulkyParserTest {
                       {
                         "id": "item_1",
                         "type": "foodstuff",
-                        "title": "Ovesné vločky",
-                        "unit": "1 x porce (50 g)",
-                        "energy": "185,5",
+                        "title": "Žitný chléb",
+                        "unit": "1 x krajíc (60 g)",
+                        "energy": "145,0",
                         "energyUnit": "kcal",
-                        "protein": 6.5,
-                        "carbohydrate": 30.2,
-                        "fat": 3.5,
-                        "fiber": 5.0,
-                        "sugar": 0.7,
-                        "saturatedFattyAcid": 0.6,
+                        "protein": 4.5,
+                        "carbohydrate": 28.0,
+                        "fat": 1.0,
+                        "fiber": 4.2,
+                        "sugar": 1.1,
+                        "sodium": null,
+                        "salt": "1,2",
                         "time": "08:15"
                       }
                     ]
-                  },
-                  {
-                    "id": "98.938",
-                    "title": "Oběd",
-                    "foodstuff": []
                   }
                 ]
               }
@@ -86,19 +89,15 @@ class KalorickeTabulkyParserTest {
         """.trimIndent()
 
         val diary = KalorickeTabulkyParser.parseDiaryResponse(sampleJson, LocalDate.of(2026, 11, 2))
-        assertEquals(2, diary.meals.size)
+        assertEquals(1, diary.meals.size)
         assertEquals(1, diary.allFoodItems.size)
+        assertNotNull(diary.drinkRegimeLiters)
+        assertEquals(2.35, diary.drinkRegimeLiters!!, 0.001)
 
-        val firstItem = diary.allFoodItems.first()
-        assertEquals("item_1", firstItem.id)
-        assertEquals("Ovesné vločky (1 x porce (50 g))", firstItem.displayName)
-        assertNotNull(firstItem.energyKcal)
-        assertEquals(185.5, firstItem.energyKcal!!, 0.001)
-        assertEquals(6.5, firstItem.proteinGrams!!, 0.001)
-        assertEquals(30.2, firstItem.carbohydrateGrams!!, 0.001)
-        assertEquals(3.5, firstItem.fatGrams!!, 0.001)
-        assertEquals(5.0, firstItem.fiberGrams!!, 0.001)
-        assertEquals("08:15", firstItem.time)
+        val item = diary.allFoodItems.first()
+        assertEquals("item_1", item.id)
+        assertEquals(1.2, item.saltGrams!!, 0.001)
+        assertNotNull(item.effectiveSodiumGrams)
+        assertEquals(1.2 * 0.3934, item.effectiveSodiumGrams!!, 0.0001)
     }
 }
-

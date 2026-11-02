@@ -3,14 +3,17 @@ package cz.kaloricketabulky.healthsync.health
 import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.HydrationRecord
 import androidx.health.connect.client.records.NutritionRecord
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.health.connect.client.units.Energy
 import androidx.health.connect.client.units.Mass
+import androidx.health.connect.client.units.Volume
 import cz.kaloricketabulky.healthsync.data.model.KtDayDiary
 import cz.kaloricketabulky.healthsync.data.model.KtFoodItem
 import cz.kaloricketabulky.healthsync.data.model.KtMealSlot
+import cz.kaloricketabulky.healthsync.data.model.MealSlotTimes
 import cz.kaloricketabulky.healthsync.data.model.SyncGranularity
 import java.time.LocalTime
 import java.time.ZoneId
@@ -23,12 +26,27 @@ enum class HealthConnectAvailability {
     NOT_SUPPORTED
 }
 
+data class DayWriteCount(
+    val nutritionRecordsWritten: Int,
+    val hydrationLitersWritten: Double?
+)
+
 class HealthConnectManager(private val context: Context) {
 
-    val permissions: Set<String> = setOf(
+    val nutritionPermissions: Set<String> = setOf(
         HealthPermission.getReadPermission(NutritionRecord::class),
         HealthPermission.getWritePermission(NutritionRecord::class)
     )
+
+    val hydrationPermissions: Set<String> = setOf(
+        HealthPermission.getReadPermission(HydrationRecord::class),
+        HealthPermission.getWritePermission(HydrationRecord::class)
+    )
+
+    val allPermissions: Set<String> = nutritionPermissions + hydrationPermissions
+
+    fun requiredPermissions(syncHydration: Boolean): Set<String> =
+        if (syncHydration) allPermissions else nutritionPermissions
 
     fun getAvailability(): HealthConnectAvailability {
         return when (HealthConnectClient.getSdkStatus(context, PROVIDER_PACKAGE_NAME)) {
@@ -42,65 +60,104 @@ class HealthConnectManager(private val context: Context) {
         return HealthConnectClient.getOrCreate(context)
     }
 
-    suspend fun hasAllPermissions(): Boolean {
+    suspend fun hasRequiredPermissions(syncHydration: Boolean): Boolean {
         if (getAvailability() != HealthConnectAvailability.AVAILABLE) return false
         val granted = getClient().permissionController.getGrantedPermissions()
-        return granted.containsAll(permissions)
+        return granted.containsAll(requiredPermissions(syncHydration))
     }
 
     /**
-     * Synchronizes a single day's [diary] into Health Connect.
-     *
-     * First clears our app's existing [NutritionRecord] entries for that calendar day
-     * (so deleted diary items or granularity changes never leave orphan duplicates),
-     * then inserts the fresh records with deterministic `clientRecordId`s.
-     *
-     * @return Number of [NutritionRecord] entries written for the day.
+     * Synchronizes a single day's [diary] into Health Connect (NutritionRecord + optional HydrationRecord).
      */
     suspend fun syncDayDiary(
         diary: KtDayDiary,
         granularity: SyncGranularity,
+        mealSlotTimes: MealSlotTimes = MealSlotTimes(),
+        syncHydration: Boolean = true,
         zoneId: ZoneId = ZoneId.of("Europe/Prague")
-    ): Int {
+    ): DayWriteCount {
         val client = getClient()
 
         val dayStart = diary.date.atStartOfDay(zoneId).toInstant()
         val dayEnd = diary.date.plusDays(1).atStartOfDay(zoneId).minusNanos(1).toInstant()
 
-        // Remove previous records created by this app for the target day
+        // 1. Nutrition records
         client.deleteRecords(
             recordType = NutritionRecord::class,
             timeRangeFilter = TimeRangeFilter.between(dayStart, dayEnd)
         )
 
-        val records = buildNutritionRecords(diary, granularity, zoneId)
-        if (records.isNotEmpty()) {
-            client.insertRecords(records)
+        val nutritionRecords = buildNutritionRecords(diary, granularity, mealSlotTimes, zoneId)
+        if (nutritionRecords.isNotEmpty()) {
+            client.insertRecords(nutritionRecords)
         }
-        return records.size
+
+        // 2. Hydration record (Pitný režim)
+        var hydrationLitersWritten: Double? = null
+        if (syncHydration) {
+            client.deleteRecords(
+                recordType = HydrationRecord::class,
+                timeRangeFilter = TimeRangeFilter.between(dayStart, dayEnd)
+            )
+            val hydrationRecord = buildHydrationRecord(diary, zoneId)
+            if (hydrationRecord != null) {
+                client.insertRecords(listOf(hydrationRecord))
+                hydrationLitersWritten = diary.drinkRegimeLiters
+            }
+        }
+
+        return DayWriteCount(
+            nutritionRecordsWritten = nutritionRecords.size,
+            hydrationLitersWritten = hydrationLitersWritten
+        )
+    }
+
+    fun buildHydrationRecord(
+        diary: KtDayDiary,
+        zoneId: ZoneId = ZoneId.of("Europe/Prague")
+    ): HydrationRecord? {
+        val liters = diary.drinkRegimeLiters?.takeIf { it > 0.0 && it <= 50.0 } ?: return null
+        val startZdt = ZonedDateTime.of(diary.date, LocalTime.of(10, 0), zoneId)
+        val endZdt = startZdt.plusHours(8)
+
+        return HydrationRecord(
+            startTime = startZdt.toInstant(),
+            startZoneOffset = startZdt.offset,
+            endTime = endZdt.toInstant(),
+            endZoneOffset = endZdt.offset,
+            volume = Volume.liters(liters),
+            metadata = Metadata.manualEntry(
+                clientRecordId = "kt_hydration_${diary.date}"
+            )
+        )
     }
 
     /**
-     * Builds the list of [NutritionRecord] objects for a [KtDayDiary] without touching Android APIs,
-     * making it easy to unit-test.
+     * Builds the list of [NutritionRecord] objects for a [KtDayDiary].
      */
     fun buildNutritionRecords(
         diary: KtDayDiary,
         granularity: SyncGranularity,
+        mealSlotTimes: MealSlotTimes = MealSlotTimes(),
         zoneId: ZoneId = ZoneId.of("Europe/Prague")
     ): List<NutritionRecord> {
         return when (granularity) {
-            SyncGranularity.PER_FOOD_ITEM -> buildPerItemRecords(diary, zoneId)
-            SyncGranularity.PER_MEAL_SLOT -> buildPerMealRecords(diary, zoneId)
+            SyncGranularity.PER_FOOD_ITEM -> buildPerItemRecords(diary, mealSlotTimes, zoneId)
+            SyncGranularity.PER_MEAL_SLOT -> buildPerMealRecords(diary, mealSlotTimes, zoneId)
         }
     }
 
-    private fun buildPerItemRecords(diary: KtDayDiary, zoneId: ZoneId): List<NutritionRecord> {
+    private fun buildPerItemRecords(
+        diary: KtDayDiary,
+        mealSlotTimes: MealSlotTimes,
+        zoneId: ZoneId
+    ): List<NutritionRecord> {
         val records = mutableListOf<NutritionRecord>()
 
         for (meal in diary.meals) {
+            val slotStart = meal.startTime(mealSlotTimes)
             meal.items.forEachIndexed { index, item ->
-                val baseTime = parseOptionalTime(item.time) ?: meal.defaultStartTime.plusMinutes(index.toLong())
+                val baseTime = parseOptionalTime(item.time) ?: slotStart.plusMinutes(index.toLong())
                 val startZdt = ZonedDateTime.of(diary.date, baseTime, zoneId)
                 val endZdt = startZdt.plusMinutes(1)
 
@@ -117,13 +174,17 @@ class HealthConnectManager(private val context: Context) {
         return records
     }
 
-    private fun buildPerMealRecords(diary: KtDayDiary, zoneId: ZoneId): List<NutritionRecord> {
+    private fun buildPerMealRecords(
+        diary: KtDayDiary,
+        mealSlotTimes: MealSlotTimes,
+        zoneId: ZoneId
+    ): List<NutritionRecord> {
         val records = mutableListOf<NutritionRecord>()
 
         for (meal in diary.meals) {
             if (meal.items.isEmpty()) continue
 
-            val startZdt = ZonedDateTime.of(diary.date, meal.defaultStartTime, zoneId)
+            val startZdt = ZonedDateTime.of(diary.date, meal.startTime(mealSlotTimes), zoneId)
             val endZdt = startZdt.plusMinutes(15)
             val summaryTitle = "${meal.title}: " + meal.items.joinToString(", ") { it.title }
 
@@ -139,7 +200,7 @@ class HealthConnectManager(private val context: Context) {
             val totalPolyFat = meal.items.sumNullable { it.polyunsaturatedFatGrams }
             val totalCholesterolMg = meal.items.sumNullable { it.cholesterolMg }
             val totalCalciumMg = meal.items.sumNullable { it.calciumMg }
-            val totalSodiumGrams = meal.items.sumNullable { it.sodiumGrams }
+            val totalSodiumGrams = meal.items.sumNullable { it.effectiveSodiumGrams }
 
             records.add(
                 NutritionRecord(
@@ -196,7 +257,7 @@ class HealthConnectManager(private val context: Context) {
             polyunsaturatedFat = positiveGrams(item.polyunsaturatedFatGrams),
             cholesterol = positiveMilligrams(item.cholesterolMg),
             calcium = positiveMilligrams(item.calciumMg),
-            sodium = positiveGrams(item.sodiumGrams),
+            sodium = positiveGrams(item.effectiveSodiumGrams),
             metadata = Metadata.manualEntry(
                 clientRecordId = "kt_item_${item.id}"
             )
@@ -240,4 +301,3 @@ class HealthConnectManager(private val context: Context) {
         private val TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("H:mm")
     }
 }
-
